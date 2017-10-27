@@ -74,10 +74,12 @@ main(int argc, char *argv[])
 
 	if (S_ISREG(st.st_mode)) {
 		warnx("operating on a regular file");
-	} else if (!S_ISCHR(st.st_mode) && !S_ISBLK(st.st_mode)) {
+	} else if (S_ISBLK(st.st_mode)) {
+		errx(1, "refusing to operate on (buffered) block device\n");
+	} else if (!S_ISCHR(st.st_mode)) {
 		errx(1, "unsupported file type");
 	}
-
+	
 	tsh_size = st.st_size;
 	tsh_write_lba_init = (tsh_size / 2) & (~TSH_BUFMASK);
 	tsh_write_lba_current = tsh_write_lba_init;
@@ -170,7 +172,8 @@ tsh_thread_reader(void *whicharg __attribute__((__unused__)))
 	hrtime_t start;
 
 	for (;;) {
-		read_lba = TSH_BUFSZ * arc4random_uniform(tsh_size / TSH_BUFSZ);
+		read_lba = TSH_BUFSZ *
+		    ((off_t)arc4random_uniform(tsh_size / TSH_BUFSZ));
 		start = gethrtime();
 		nread = pread(tsh_fd, buf, sizeof (buf), read_lba);
 		if (nread < 0) {
