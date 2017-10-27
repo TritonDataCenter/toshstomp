@@ -1,5 +1,7 @@
 # toshstomp: attempt to induce ROGUE-28
 
+See [ROGUE-28](https://devhub.joyent.com/jira/browse/ROGUE-28).
+
 Build with:
 
     $ make
