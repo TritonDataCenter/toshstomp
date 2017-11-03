@@ -231,7 +231,7 @@ tsh_thread_reader(void *whicharg __attribute__((__unused__)))
 		nread = pread(tsh_fd, buf, tsh_bufsz, read_lba);
 		if (nread < 0) {
 			warn("pread lba 0x%x", read_lba);
-		} else if (nread != sizeof (buf)) {
+		} else if (nread != tsh_bufsz) {
 			warnx("pread lba 0x%x reported %d bytes\n", read_lba);
 		}
 		tsh_time_reading += gethrtime() - start;
