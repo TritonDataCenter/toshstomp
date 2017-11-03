@@ -9,20 +9,22 @@
 #include <pthread.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <alloca.h>
 
-#define TSH_NWRITERS	10
+#define	TSH_NWRITERS	10
 #define	TSH_NREADERS	10
-#define	TSH_BUFSHIFT    13	/* buffer size of 8192 bytes */
-#define	TSH_BUFSZ	(1<<(TSH_BUFSHIFT))
-#define	TSH_BUFMASK	(TSH_BUFSZ - 1)
+#define	TSH_BUFSHIFT    13	/* default buffer size of 8192 bytes */
+#define	TSH_BUFMASK	(tsh_bufsz - 1)
 
 /* reporting interval */
 static unsigned int tsh_report_msec = 1000;
 
 /* buffer of data that we will write out */
-static char tsh_buffer[TSH_BUFSZ];
+static char *tsh_buffer;
+/* size of buffer */
+off_t tsh_bufsz = (1 << TSH_BUFSHIFT);
 /* identifiers for the threads we create */
-static pthread_t tsh_threads[TSH_NWRITERS + TSH_NREADERS];
+static pthread_t *tsh_threads;
 /* file descriptor for the disk or file that we're operating on */
 static int tsh_fd;
 /* size of the disk or file that we're working on */
@@ -56,20 +58,62 @@ main(int argc, char *argv[])
 	struct stat st;
 	unsigned int i;
 	int error;
+	unsigned int nwriters = TSH_NWRITERS;
+	unsigned int nreaders = TSH_NREADERS;
 	char timebuf[25];
+	char *file;
+	int c;
 
-	if (argc != 2) {
+	while ((c = getopt(argc, argv, "b:r:w:")) != -1) {
+		char *end;
+
+		switch (c) {
+		case 'b': {
+			int bufshift = strtoul(optarg, &end, 10);
+
+			if (*end != '\0' || (bufshift < 9))
+				errx(1, "invalid buffer shift");
+
+			tsh_bufsz = (1 << bufshift);
+			break;
+		}
+
+		case 'r':
+			nreaders = strtoul(optarg, &end, 10);
+
+			if (*end != '\0')
+				errx(1, "invalid number of readers");
+
+			break;
+
+		case 'w':
+			nwriters = strtoul(optarg, &end, 10);
+
+			if (*end != '\0')
+				errx(1, "invalid number of writers");
+
+			break;
+
+		default:
+			usage();
+		}
+	}
+
+	if (argc == optind) {
 		usage();
 	}
 
-	init_buffer(tsh_buffer, TSH_BUFSZ);
-	tsh_fd = open(argv[1], O_RDWR);
+	if ((tsh_buffer = malloc(tsh_bufsz)) == NULL)
+		err(1, "couldn't allocate write buffer");
+
+	init_buffer(tsh_buffer, tsh_bufsz);
+	tsh_fd = open(file = argv[optind], O_RDWR);
 	if (tsh_fd < 0) {
-		err(1, "open \"%s\"", argv[1]);
+		err(1, "open \"%s\"", file);
 	}
 
 	if (fstat(tsh_fd, &st) != 0) {
-		err(1, "fstat(%d) (\"%s\"):", tsh_fd, argv[1]);
+		err(1, "fstat(%d) (\"%s\"):", tsh_fd, file);
 	}
 
 	if (S_ISREG(st.st_mode)) {
@@ -79,20 +123,28 @@ main(int argc, char *argv[])
 	} else if (!S_ISCHR(st.st_mode)) {
 		errx(1, "unsupported file type");
 	}
-	
+
 	tsh_size = st.st_size;
 	tsh_write_lba_init = (tsh_size / 2) & (~TSH_BUFMASK);
 	tsh_write_lba_current = tsh_write_lba_init;
 
-	if (tsh_size < TSH_BUFSZ) {
+	if (tsh_size < tsh_bufsz) {
 		errx(1, "file is too small");
 	}
 
-	(void) printf("file: %s\n", argv[1]);
+	tsh_threads = malloc((nwriters + nreaders) * sizeof (pthread_t));
+
+	if (tsh_threads == NULL)
+		err(1, "couldn't allocate thread buffer");
+
+	(void) printf("file: %s\n", file);
 	(void) printf("size: 0x%lx\n", tsh_size);
+	(void) printf("buffer size: %ld\n", tsh_bufsz);
+	(void) printf("writers: %d\n", nwriters);
+	(void) printf("readers: %d\n", nreaders);
 	(void) printf("using initial write LBA: 0x%lx\n", tsh_write_lba_init);
 
-	for (i = 0; i < TSH_NWRITERS; i++) {
+	for (i = 0; i < nwriters; i++) {
 		error = pthread_create(&tsh_threads[i], NULL,
 		    tsh_thread_writer, (void *)(uintptr_t)i);
 		if (error != 0) {
@@ -100,8 +152,8 @@ main(int argc, char *argv[])
 		}
 	}
 
-	for (i = 0; i < TSH_NREADERS; i++) {
-		error = pthread_create(&tsh_threads[i + TSH_NWRITERS], NULL,
+	for (i = 0; i < nreaders; i++) {
+		error = pthread_create(&tsh_threads[i + nwriters], NULL,
 		    tsh_thread_reader, (void *)(uintptr_t)i);
 		if (error != 0) {
 			err(1, "pthread_create");
@@ -122,10 +174,10 @@ main(int argc, char *argv[])
 		(void) strftime(timebuf, sizeof (timebuf), "%FT%TZ", &nowtm);
 
 		(void) printf("%20s %7d %7ld %7d %7ld 0x%012lx %2d\n", timebuf,
-		    tsh_nreads, 
-		    (unsigned long) (tsh_time_reading / tsh_nreads / 1000),
-		    tsh_nwrites,
-		    (unsigned long) (tsh_time_writing / tsh_nwrites / 1000),
+		    tsh_nreads, tsh_nreads ? (unsigned long)
+		    (tsh_time_reading / tsh_nreads / 1000) : 0,
+		    tsh_nwrites, tsh_nwrites ? (unsigned long)
+		    (tsh_time_writing / tsh_nwrites / 1000) : 0,
 		    tsh_write_lba_current, tsh_write_lba_wraparounds);
 	}
 
@@ -144,7 +196,8 @@ main(int argc, char *argv[])
 static void
 usage(void)
 {
-	(void) fprintf(stderr, "usage: toshstomp DEVICE_OR_FILE\n");
+	(void) fprintf(stderr, "usage: toshstomp [-r #readers] "
+	    "[-w #writers] [-b bufshift] DEVICE_OR_FILE\n");
 	exit(2);
 }
 
@@ -166,14 +219,14 @@ init_buffer(char *buf, size_t bufsz)
 static void *
 tsh_thread_reader(void *whicharg __attribute__((__unused__)))
 {
-	char buf[TSH_BUFSZ];
+	char *buf = alloca(tsh_bufsz);
 	off_t read_lba;
 	int nread;
 	hrtime_t start;
 
 	for (;;) {
-		read_lba = TSH_BUFSZ *
-		    ((off_t)arc4random_uniform(tsh_size / TSH_BUFSZ));
+		read_lba = tsh_bufsz *
+		    ((off_t)arc4random_uniform(tsh_size / tsh_bufsz));
 		start = gethrtime();
 		nread = pread(tsh_fd, buf, sizeof (buf), read_lba);
 		if (nread < 0) {
@@ -201,18 +254,18 @@ tsh_thread_writer(void *whicharg __attribute__((__unused__)))
 		 */
 		(void) pthread_mutex_lock(&tsh_write_lba_lock);
 		write_lba = tsh_write_lba_current;
-		tsh_write_lba_current += TSH_BUFSZ;
-		if (tsh_write_lba_current + TSH_BUFSZ >= tsh_size) {
+		tsh_write_lba_current += tsh_bufsz;
+		if (tsh_write_lba_current + tsh_bufsz >= tsh_size) {
 			tsh_write_lba_current = tsh_write_lba_init;
 			tsh_write_lba_wraparounds++;
 		}
 		(void) pthread_mutex_unlock(&tsh_write_lba_lock);
 
 		start = gethrtime();
-		nwritten = pwrite(tsh_fd, tsh_buffer, TSH_BUFSZ, write_lba);
+		nwritten = pwrite(tsh_fd, tsh_buffer, tsh_bufsz, write_lba);
 		if (nwritten < 0) {
 			warn("pwrite lba 0x%x", write_lba);
-		} else if (nwritten != TSH_BUFSZ) {
+		} else if (nwritten != tsh_bufsz) {
 			warnx("pwrite lba 0x%x reported %d bytes\n", write_lba);
 		}
 		tsh_time_writing += gethrtime() - start;
