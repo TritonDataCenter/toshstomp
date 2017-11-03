@@ -228,7 +228,7 @@ tsh_thread_reader(void *whicharg __attribute__((__unused__)))
 		read_lba = tsh_bufsz *
 		    ((off_t)arc4random_uniform(tsh_size / tsh_bufsz));
 		start = gethrtime();
-		nread = pread(tsh_fd, buf, sizeof (buf), read_lba);
+		nread = pread(tsh_fd, buf, tsh_bufsz, read_lba);
 		if (nread < 0) {
 			warn("pread lba 0x%x", read_lba);
 		} else if (nread != sizeof (buf)) {
