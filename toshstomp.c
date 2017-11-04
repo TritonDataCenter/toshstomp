@@ -179,6 +179,11 @@ main(int argc, char *argv[])
 		    tsh_nwrites, tsh_nwrites ? (unsigned long)
 		    (tsh_time_writing / tsh_nwrites / 1000) : 0,
 		    tsh_write_lba_current, tsh_write_lba_wraparounds);
+
+		tsh_nreads = 0;
+		tsh_nwrites = 0;
+		tsh_time_writing = 0;
+		tsh_time_reading = 0;
 	}
 
 	/*
